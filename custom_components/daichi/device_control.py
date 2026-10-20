@@ -1,56 +1,98 @@
-"""Проверка применения команд управления устройством."""
+"""Поиск функций в pult устройства и проверка применения команд управления."""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from .const import (
-    FUNCTION_ID_POWER,
-    FUNCTION_ID_TEMPERATURE,
-    FUNCTION_ID_COOL,
-    FUNCTION_ID_HEAT,
-    FUNCTION_ID_AUTO,
-    FUNCTION_ID_DRY,
-    FUNCTION_ID_FAN,
-    FUNCTION_ID_FAN_SPEED_AUTO,
-    FUNCTION_ID_FAN_SPEED,
-    FUNCTION_ID_VERTICAL_SWING,
-    FUNCTION_ID_HORIZONTAL_SWING,
-    FUNCTION_ID_3D_SWING,
-    FUNCTION_ID_ECO,
-    FUNCTION_ID_TURBO,
-    FUNCTION_ID_SOUND_OFF,
-    FUNCTION_ID_SLEEP,
+    FUNCTION_BLE_TAGS,
+    LEGACY_FUNCTION_IDS,
+    FUNC_POWER,
+    FUNC_TEMPERATURE,
+    FUNC_COOL,
+    FUNC_HEAT,
+    FUNC_AUTO,
+    FUNC_DRY,
+    FUNC_FAN,
+    FUNC_FAN_SPEED_AUTO,
+    FUNC_FAN_SPEED,
 )
 
 
-def _get_pult_function(device_data: dict[str, Any], function_id: int) -> dict[str, Any] | None:
-    """Вернуть функцию из pult по id или None."""
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            if func.get("id") == function_id:
-                return func
+def iter_pult_functions(device_data: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Перебрать все функции pult, включая вложенные linkedFunction."""
+    for section in device_data.get("pult") or []:
+        for func in section.get("functions") or []:
+            while isinstance(func, dict):
+                yield func
+                func = func.get("linkedFunction")
+
+
+def _get_ble_info(func: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Вернуть (bleTag, bleOnCommand) функции."""
+    info = (func.get("metaData") or {}).get("bleTagInfo") or {}
+    tag = info.get("bleTag")
+    on_command = info.get("bleOnCommand")
+    return tag, (str(on_command) if on_command is not None else None)
+
+
+def find_function(device_data: dict[str, Any], function: str) -> dict[str, Any] | None:
+    """
+    Найти функцию устройства по логическому имени (FUNC_*).
+
+    Function ID зависят от модели устройства, поэтому функция ищется по
+    bleTag/bleOnCommand из metaData. Исторический id используется только
+    если у функции с этим id нет bleTagInfo.
+    """
+    if not device_data:
+        return None
+
+    functions = list(iter_pult_functions(device_data))
+    tag, on_command = FUNCTION_BLE_TAGS[function]
+
+    for func in functions:
+        func_tag, func_on_command = _get_ble_info(func)
+        if func_tag != tag:
+            continue
+        if on_command is not None and func_on_command != on_command:
+            continue
+        # Ручная скорость вентилятора имеет тот же bleTag, что и авто ("0")
+        if function == FUNC_FAN_SPEED and func_on_command == "0":
+            continue
+        return func
+
+    legacy_id = LEGACY_FUNCTION_IDS.get(function)
+    for func in functions:
+        if func.get("id") == legacy_id and _get_ble_info(func)[0] is None:
+            return func
+
     return None
 
 
-def _get_pult_function_state(device_data: dict[str, Any], function_id: int) -> dict[str, Any]:
+def get_function_id(device_data: dict[str, Any], function: str) -> int | None:
+    """Вернуть id функции устройства по логическому имени или None."""
+    func = find_function(device_data, function)
+    return func.get("id") if func else None
+
+
+def get_function_state(device_data: dict[str, Any], function: str) -> dict[str, Any]:
     """Вернуть state функции из pult или пустой dict."""
-    func = _get_pult_function(device_data, function_id)
-    return (func or {}).get("state", {})
+    return (find_function(device_data, function) or {}).get("state") or {}
 
 
 # Иконки режимов в state.info.iconNames
-HVAC_FUNCTION_ID_TO_ICON = {
-    FUNCTION_ID_COOL: "modeCool_active",
-    FUNCTION_ID_HEAT: "modeHeat_active",
-    FUNCTION_ID_AUTO: "modeAuto_active",
-    FUNCTION_ID_DRY: "modeDry_active",
-    FUNCTION_ID_FAN: "modeFan_active",
+HVAC_FUNCTION_TO_ICON = {
+    FUNC_COOL: "modeCool_active",
+    FUNC_HEAT: "modeHeat_active",
+    FUNC_AUTO: "modeAuto_active",
+    FUNC_DRY: "modeDry_active",
+    FUNC_FAN: "modeFan_active",
 }
 
 
 def verify_control_applied(
     device_data: dict[str, Any],
-    function_id: int,
+    function: str,
     value: Any,
 ) -> bool:
     """
@@ -63,14 +105,13 @@ def verify_control_applied(
     state = device_data.get("state", {})
     icon_names = state.get("info", {}).get("iconNames", [])
 
-    if function_id == FUNCTION_ID_POWER:
+    if function == FUNC_POWER:
         is_on = state.get("isOn", False)
         expected = bool(value) if value is not None else True
         return is_on == expected
 
-    if function_id == FUNCTION_ID_TEMPERATURE:
-        st = _get_pult_function_state(device_data, FUNCTION_ID_TEMPERATURE)
-        current_val = st.get("value")
+    if function in (FUNC_TEMPERATURE, FUNC_FAN_SPEED):
+        current_val = get_function_state(device_data, function).get("value")
         if current_val is None:
             return False
         try:
@@ -78,42 +119,18 @@ def verify_control_applied(
         except (TypeError, ValueError):
             return False
 
-    if function_id in HVAC_FUNCTION_ID_TO_ICON:
-        # Режим работы (applyable): проверяем, что устройство включено и иконка режима активна
+    if function in HVAC_FUNCTION_TO_ICON:
+        # Режим работы (applyable): устройство включено и режим активен
         if not state.get("isOn", False):
             return False
-        expected_icon = HVAC_FUNCTION_ID_TO_ICON.get(function_id)
-        return expected_icon in icon_names if expected_icon else False
+        if HVAC_FUNCTION_TO_ICON[function] in icon_names:
+            return True
+        return bool(get_function_state(device_data, function).get("isOn", False))
 
-    if function_id == FUNCTION_ID_FAN_SPEED_AUTO:
-        st = _get_pult_function_state(device_data, FUNCTION_ID_FAN_SPEED_AUTO)
-        return bool(st.get("isOn", False))
+    if function == FUNC_FAN_SPEED_AUTO:
+        return bool(get_function_state(device_data, function).get("isOn", False))
 
-    if function_id == FUNCTION_ID_FAN_SPEED:
-        st = _get_pult_function_state(device_data, FUNCTION_ID_FAN_SPEED)
-        current_val = st.get("value")
-        if current_val is None:
-            return False
-        try:
-            return int(current_val) == int(value)
-        except (TypeError, ValueError):
-            return False
-
-    # Переключаемые функции: 359,360,361 (swing), 363,364,365,366 (preset/sound/sleep)
-    toggle_function_ids = {
-        FUNCTION_ID_VERTICAL_SWING,
-        FUNCTION_ID_HORIZONTAL_SWING,
-        FUNCTION_ID_3D_SWING,
-        FUNCTION_ID_ECO,
-        FUNCTION_ID_TURBO,
-        FUNCTION_ID_SOUND_OFF,
-        FUNCTION_ID_SLEEP,
-    }
-    if function_id in toggle_function_ids:
-        st = _get_pult_function_state(device_data, function_id)
-        current = bool(st.get("isOn", False))
-        expected = bool(value) if value is not None else True
-        return current == expected
-
-    # Неизвестная функция — считаем применённой
-    return True
+    # Переключаемые функции (swing, preset, sound off и т.д.)
+    current = bool(get_function_state(device_data, function).get("isOn", False))
+    expected = bool(value) if value is not None else True
+    return current == expected
