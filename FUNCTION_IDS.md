@@ -1,6 +1,17 @@
 # Function IDs for Daichi Device Control
 
-## Complete List of Function IDs
+> **Function IDs are device-specific.** Different air conditioner models report different
+> function IDs in their `pult`, and the cloud rejects unknown IDs with
+> `422 "Функция не поддерживается устройством"`. The integration therefore resolves the
+> ID for each device at runtime by matching `metaData.bleTagInfo.bleTag` /
+> `bleOnCommand` (including nested `linkedFunction` entries) — see
+> `FUNCTION_BLE_TAGS` in `const.py` and `find_function` in `device_control.py`.
+>
+> The IDs below are from the model the integration was originally developed on and are
+> used only as a fallback when a function has no `bleTagInfo`. The BLE tag columns are
+> what actually identifies a function.
+
+## Function IDs (reference model)
 
 ### Basic Functions
 

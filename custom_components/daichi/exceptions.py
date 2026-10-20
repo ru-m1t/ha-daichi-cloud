@@ -16,3 +16,6 @@ class InvalidAuth(DaichiException):
 class DeviceNotFound(DaichiException):
     """Error to indicate device not found."""
 
+
+class FunctionNotSupported(DaichiException):
+    """Error to indicate the device pult has no matching function."""

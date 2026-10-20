@@ -15,55 +15,90 @@ DEFAULT_CLIENT_ID = "sOJO7B6SqgaKudTfCzqLAy540cCuDzpI"
 # Update interval
 UPDATE_INTERVAL = 60  # seconds
 
-# Function IDs для управления устройством
-# См. FUNCTION_IDS.md для полного списка
+# Логические функции устройства.
+# Function ID у разных моделей кондиционеров разные, поэтому реальный id
+# определяется по pult конкретного устройства через bleTag/bleOnCommand
+# (см. device_control.find_function и FUNCTION_IDS.md).
 
 # Основные функции
-FUNCTION_ID_POWER = 350
-FUNCTION_ID_TEMPERATURE = 351
+FUNC_POWER = "power"
+FUNC_TEMPERATURE = "temperature"
 
 # Режимы работы (Mode of operation)
-FUNCTION_ID_COOL = 352
-FUNCTION_ID_HEAT = 353
-FUNCTION_ID_AUTO = 354
-FUNCTION_ID_DRY = 355
-FUNCTION_ID_FAN = 356
+FUNC_COOL = "cool"
+FUNC_HEAT = "heat"
+FUNC_AUTO = "auto"
+FUNC_DRY = "dry"
+FUNC_FAN = "fan"
 
 # Скорость вентилятора (Fan speed)
-FUNCTION_ID_FAN_SPEED_AUTO = 357
-FUNCTION_ID_FAN_SPEED = 358
+FUNC_FAN_SPEED_AUTO = "fan_speed_auto"
+FUNC_FAN_SPEED = "fan_speed"
 
 # Swing (Качание)
-FUNCTION_ID_VERTICAL_SWING = 359
-FUNCTION_ID_HORIZONTAL_SWING = 360
-FUNCTION_ID_3D_SWING = 361
+FUNC_VERTICAL_SWING = "vertical_swing"
+FUNC_HORIZONTAL_SWING = "horizontal_swing"
+FUNC_3D_SWING = "3d_swing"
 
 # Дополнительные режимы (Additional modes)
-FUNCTION_ID_COMFORTABLE_SLEEP = 362
-FUNCTION_ID_ECO = 363
-FUNCTION_ID_TURBO = 364
-FUNCTION_ID_SOUND_OFF = 365
-FUNCTION_ID_SLEEP = 366
-FUNCTION_ID_HEATING_PLUS_8 = 332
+FUNC_ECO = "eco"
+FUNC_TURBO = "turbo"
+FUNC_SOUND_OFF = "sound_off"
+FUNC_SLEEP = "sleep"
+FUNC_HEATING_PLUS_8 = "heating_plus_8"
 
-# Маппинг режимов Home Assistant на Function IDs
-HVAC_MODE_TO_FUNCTION_ID = {
-    "off": FUNCTION_ID_POWER,
-    "cool": FUNCTION_ID_COOL,
-    "heat": FUNCTION_ID_HEAT,
-    "dry": FUNCTION_ID_DRY,
-    "fan_only": FUNCTION_ID_FAN,
-    "auto": FUNCTION_ID_AUTO,
+# Логическая функция -> (bleTag, bleOnCommand). None — bleOnCommand не проверяется.
+# Для FUNC_FAN_SPEED дополнительно требуется bleOnCommand != "0" (см. find_function).
+FUNCTION_BLE_TAGS: dict[str, tuple[str, str | None]] = {
+    FUNC_POWER: ("power", None),
+    FUNC_TEMPERATURE: ("setTemp", None),
+    FUNC_COOL: ("mode", "cool"),
+    FUNC_HEAT: ("mode", "heat"),
+    FUNC_AUTO: ("mode", "auto"),
+    FUNC_DRY: ("mode", "dry"),
+    FUNC_FAN: ("mode", "vent"),
+    FUNC_FAN_SPEED_AUTO: ("fanSpeed", "0"),
+    FUNC_FAN_SPEED: ("fanSpeed", None),
+    FUNC_VERTICAL_SWING: ("flow", "vert_on"),
+    FUNC_HORIZONTAL_SWING: ("flow", "horizont_on"),
+    FUNC_3D_SWING: ("flow", "3d_on"),
+    FUNC_ECO: ("economy", "on"),
+    FUNC_TURBO: ("powerfull", "on"),
+    FUNC_SOUND_OFF: ("beepOff", "on"),
+    FUNC_SLEEP: ("sleep", "on"),
+    FUNC_HEATING_PLUS_8: ("heat8", "on"),
 }
 
-# Маппинг скорости вентилятора Home Assistant на Function IDs
-FAN_MODE_TO_FUNCTION_ID = {
-    "auto": FUNCTION_ID_FAN_SPEED_AUTO,
-    "1": FUNCTION_ID_FAN_SPEED,
-    "2": FUNCTION_ID_FAN_SPEED,
-    "3": FUNCTION_ID_FAN_SPEED,
-    "4": FUNCTION_ID_FAN_SPEED,
-    "5": FUNCTION_ID_FAN_SPEED,
+# Исторические Function ID (модель, на которой разрабатывалась интеграция).
+# Используются только как запасной вариант, если у функции в pult нет bleTagInfo.
+LEGACY_FUNCTION_IDS: dict[str, int] = {
+    FUNC_POWER: 350,
+    FUNC_TEMPERATURE: 351,
+    FUNC_COOL: 352,
+    FUNC_HEAT: 353,
+    FUNC_AUTO: 354,
+    FUNC_DRY: 355,
+    FUNC_FAN: 356,
+    FUNC_FAN_SPEED_AUTO: 357,
+    FUNC_FAN_SPEED: 358,
+    FUNC_VERTICAL_SWING: 359,
+    FUNC_HORIZONTAL_SWING: 360,
+    FUNC_3D_SWING: 361,
+    FUNC_ECO: 363,
+    FUNC_TURBO: 364,
+    FUNC_SOUND_OFF: 365,
+    FUNC_SLEEP: 366,
+    FUNC_HEATING_PLUS_8: 332,
+}
+
+# Маппинг режимов Home Assistant на логические функции
+HVAC_MODE_TO_FUNCTION = {
+    "off": FUNC_POWER,
+    "cool": FUNC_COOL,
+    "heat": FUNC_HEAT,
+    "dry": FUNC_DRY,
+    "fan_only": FUNC_FAN,
+    "auto": FUNC_AUTO,
 }
 
 # Preset modes (дополнительные режимы работы)
@@ -74,10 +109,10 @@ PRESET_ECO = "eco"
 PRESET_TURBO = "turbo"
 PRESET_SLEEP = "sleep"
 
-PRESET_MODE_TO_FUNCTION_ID = {
-    PRESET_ECO: FUNCTION_ID_ECO,
-    PRESET_TURBO: FUNCTION_ID_TURBO,
-    PRESET_SLEEP: FUNCTION_ID_SLEEP,
+PRESET_MODE_TO_FUNCTION = {
+    PRESET_ECO: FUNC_ECO,
+    PRESET_TURBO: FUNC_TURBO,
+    PRESET_SLEEP: FUNC_SLEEP,
 }
 
 # Swing modes
@@ -86,29 +121,28 @@ SWING_VERTICAL = "vertical"
 SWING_HORIZONTAL = "horizontal"
 SWING_BOTH = "both"
 
-SWING_MODE_TO_FUNCTION_ID = {
-    SWING_VERTICAL: FUNCTION_ID_VERTICAL_SWING,
-    SWING_HORIZONTAL: FUNCTION_ID_HORIZONTAL_SWING,
-    SWING_BOTH: FUNCTION_ID_3D_SWING,
+SWING_MODE_TO_FUNCTION = {
+    SWING_VERTICAL: FUNC_VERTICAL_SWING,
+    SWING_HORIZONTAL: FUNC_HORIZONTAL_SWING,
+    SWING_BOTH: FUNC_3D_SWING,
 }
 
-FUNCTION_ID_TO_HVAC_MODE = {
-    FUNCTION_ID_COOL: "cool",
-    FUNCTION_ID_HEAT: "heat",
-    FUNCTION_ID_AUTO: "auto",
-    FUNCTION_ID_DRY: "dry",
-    FUNCTION_ID_FAN: "fan_only",
+FUNCTION_TO_HVAC_MODE = {
+    FUNC_COOL: "cool",
+    FUNC_HEAT: "heat",
+    FUNC_AUTO: "auto",
+    FUNC_DRY: "dry",
+    FUNC_FAN: "fan_only",
 }
 
-FUNCTION_ID_TO_PRESET = {
-    FUNCTION_ID_ECO: PRESET_ECO,
-    FUNCTION_ID_TURBO: PRESET_TURBO,
-    FUNCTION_ID_SLEEP: PRESET_SLEEP,
+FUNCTION_TO_PRESET = {
+    FUNC_ECO: PRESET_ECO,
+    FUNC_TURBO: PRESET_TURBO,
+    FUNC_SLEEP: PRESET_SLEEP,
 }
 
-FUNCTION_ID_TO_SWING = {
-    FUNCTION_ID_VERTICAL_SWING: SWING_VERTICAL,
-    FUNCTION_ID_HORIZONTAL_SWING: SWING_HORIZONTAL,
-    FUNCTION_ID_3D_SWING: SWING_BOTH,
+FUNCTION_TO_SWING = {
+    FUNC_VERTICAL_SWING: SWING_VERTICAL,
+    FUNC_HORIZONTAL_SWING: SWING_HORIZONTAL,
+    FUNC_3D_SWING: SWING_BOTH,
 }
-

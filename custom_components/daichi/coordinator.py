@@ -14,8 +14,8 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from .api import DaichiApiClient
 from .const import UPDATE_INTERVAL
-from .device_control import verify_control_applied
-from .exceptions import CannotConnect, InvalidAuth
+from .device_control import get_function_id, verify_control_applied
+from .exceptions import CannotConnect, FunctionNotSupported, InvalidAuth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,10 +81,26 @@ class DaichiDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.exception("Unexpected error updating Daichi data")
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
+    async def _async_resolve_function_id(self, device_id: int, function: str) -> int:
+        """Определить function id для устройства по его pult (с обновлением при отсутствии)."""
+        function_id = get_function_id((self.data or {}).get(str(device_id), {}), function)
+        if function_id is None:
+            _LOGGER.debug(
+                "Function %s not found for device %s, refreshing device data",
+                function, device_id,
+            )
+            await self.async_refresh()
+            function_id = get_function_id((self.data or {}).get(str(device_id), {}), function)
+        if function_id is None:
+            raise FunctionNotSupported(
+                f"Device {device_id} does not support function '{function}'"
+            )
+        return function_id
+
     async def async_control_device_with_retry(
         self,
         device_id: int,
-        function_id: int,
+        function: str,
         value: int | bool | None = None,
         parameters: dict[str, Any] | None = None,
         max_retries: int = 2,
@@ -92,8 +108,14 @@ class DaichiDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """
         Отправить команду устройству, обновить состояние и при необходимости повторить.
+        function — логическое имя функции (FUNC_*), id определяется по pult устройства.
         Если после отправки состояние не совпадает с ожидаемым — повторяет запрос до max_retries раз.
         """
+        function_id = await self._async_resolve_function_id(device_id, function)
+        _LOGGER.debug(
+            "Control device %s: function %s -> id %s, value %s",
+            device_id, function, function_id, value,
+        )
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
@@ -115,7 +137,7 @@ class DaichiDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await asyncio.sleep(verify_delay)
             await self.async_request_refresh()
             device_data = (self.data or {}).get(str(device_id), {})
-            if verify_control_applied(device_data, function_id, value):
+            if verify_control_applied(device_data, function, value):
                 if attempt > 0:
                     _LOGGER.debug(
                         "Command applied after retry %s for device %s function %s",

@@ -17,71 +17,54 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
-    FUNCTION_ID_POWER,
-    FUNCTION_ID_TEMPERATURE,
-    FUNCTION_ID_FAN_SPEED_AUTO,
-    FUNCTION_ID_FAN_SPEED,
-    FUNCTION_ID_VERTICAL_SWING,
-    FUNCTION_ID_HORIZONTAL_SWING,
-    FUNCTION_ID_3D_SWING,
-    FUNCTION_ID_ECO,
-    FUNCTION_ID_TURBO,
-    FUNCTION_ID_SLEEP,
-    FUNCTION_ID_TO_HVAC_MODE,
-    FUNCTION_ID_TO_PRESET,
-    FUNCTION_ID_TO_SWING,
-    HVAC_MODE_TO_FUNCTION_ID,
+    FUNC_POWER,
+    FUNC_TEMPERATURE,
+    FUNC_FAN_SPEED_AUTO,
+    FUNC_FAN_SPEED,
+    FUNC_VERTICAL_SWING,
+    FUNC_HORIZONTAL_SWING,
+    FUNC_3D_SWING,
+    FUNC_ECO,
+    FUNC_TURBO,
+    FUNC_SLEEP,
+    FUNCTION_TO_HVAC_MODE,
+    FUNCTION_TO_PRESET,
+    FUNCTION_TO_SWING,
+    HVAC_MODE_TO_FUNCTION,
     PRESET_NONE,
-    PRESET_MODE_TO_FUNCTION_ID,
+    PRESET_MODE_TO_FUNCTION,
     SWING_OFF,
     SWING_BOTH,
-    SWING_MODE_TO_FUNCTION_ID,
+    SWING_MODE_TO_FUNCTION,
 )
 from .coordinator import DaichiDataUpdateCoordinator
+from .device_control import find_function, get_function_state
 from .entity import DaichiEntity, parse_temperature
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _collect_function_ids(device_data: dict[str, Any]) -> set[int]:
-    """Collect all function IDs available in device pult."""
-    ids: set[int] = set()
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            fid = func.get("id")
-            if fid is not None:
-                ids.add(fid)
-    return ids
+def _detect_value_range(
+    device_data: dict[str, Any], function: str, default: tuple[float, float]
+) -> tuple[float, float]:
+    """Detect min/max value of a numeric function from pult config."""
+    func = find_function(device_data, function)
+    if not func:
+        return default
 
+    min_val = func.get("minValue") or func.get("min")
+    max_val = func.get("maxValue") or func.get("max")
+    value_range = (func.get("state") or {}).get("valueRange")
+    if isinstance(value_range, list) and len(value_range) == 2:
+        min_val = min_val if min_val is not None else value_range[0]
+        max_val = max_val if max_val is not None else value_range[1]
 
-def _detect_fan_speed_range(device_data: dict[str, Any]) -> int:
-    """Detect max fan speed from pult function config."""
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            if func.get("id") == FUNCTION_ID_FAN_SPEED:
-                max_val = func.get("maxValue") or func.get("max")
-                if max_val is not None:
-                    try:
-                        return int(max_val)
-                    except (ValueError, TypeError):
-                        pass
-    return 5
-
-
-def _detect_temp_range(device_data: dict[str, Any]) -> tuple[float, float]:
-    """Detect min/max temperature from pult function config."""
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            if func.get("id") == FUNCTION_ID_TEMPERATURE:
-                min_val = func.get("minValue") or func.get("min")
-                max_val = func.get("maxValue") or func.get("max")
-                try:
-                    lo = float(min_val) if min_val is not None else 16.0
-                    hi = float(max_val) if max_val is not None else 30.0
-                    return (lo, hi)
-                except (ValueError, TypeError):
-                    pass
-    return (16.0, 30.0)
+    try:
+        lo = float(min_val) if min_val is not None else default[0]
+        hi = float(max_val) if max_val is not None else default[1]
+        return (lo, hi)
+    except (ValueError, TypeError):
+        return default
 
 
 class DaichiClimateEntity(DaichiEntity, ClimateEntity):
@@ -100,11 +83,12 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         super().__init__(coordinator, device_id, device_data)
         self._attr_unique_id = f"{DOMAIN}_{device_id}"
 
-        func_ids = _collect_function_ids(device_data)
+        def has(function: str) -> bool:
+            return find_function(device_data, function) is not None
 
         self._attr_hvac_modes = [HVACMode.OFF]
-        for fid, mode_str in FUNCTION_ID_TO_HVAC_MODE.items():
-            if fid in func_ids:
+        for function, mode_str in FUNCTION_TO_HVAC_MODE.items():
+            if has(function):
                 self._attr_hvac_modes.append(HVACMode(mode_str))
         if len(self._attr_hvac_modes) == 1:
             self._attr_hvac_modes = [
@@ -112,16 +96,16 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
                 HVACMode.FAN_ONLY, HVACMode.DRY, HVACMode.AUTO,
             ]
 
-        has_fan = FUNCTION_ID_FAN_SPEED in func_ids or FUNCTION_ID_FAN_SPEED_AUTO in func_ids
+        has_fan = has(FUNC_FAN_SPEED) or has(FUNC_FAN_SPEED_AUTO)
         if has_fan:
-            max_speed = _detect_fan_speed_range(device_data)
-            self._attr_fan_modes = ["auto"] + [str(i) for i in range(1, max_speed + 1)]
+            _, max_speed = _detect_value_range(device_data, FUNC_FAN_SPEED, (1, 5))
+            self._attr_fan_modes = ["auto"] + [str(i) for i in range(1, int(max_speed) + 1)]
         else:
             self._attr_fan_modes = []
 
         preset_list: list[str] = []
-        for fid, preset_name in FUNCTION_ID_TO_PRESET.items():
-            if fid in func_ids:
+        for function, preset_name in FUNCTION_TO_PRESET.items():
+            if has(function):
                 preset_list.append(preset_name)
         if preset_list:
             self._attr_preset_modes = [PRESET_NONE] + preset_list
@@ -129,8 +113,8 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
             self._attr_preset_modes = []
 
         swing_list: list[str] = []
-        for fid, swing_name in FUNCTION_ID_TO_SWING.items():
-            if fid in func_ids:
+        for function, swing_name in FUNCTION_TO_SWING.items():
+            if has(function):
                 swing_list.append(swing_name)
         if swing_list:
             self._attr_swing_modes = [SWING_OFF] + swing_list
@@ -138,7 +122,7 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
             self._attr_swing_modes = []
 
         features = ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
-        if FUNCTION_ID_TEMPERATURE in func_ids:
+        if has(FUNC_TEMPERATURE):
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
         if has_fan:
             features |= ClimateEntityFeature.FAN_MODE
@@ -148,7 +132,7 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
             features |= ClimateEntityFeature.SWING_MODE
         self._attr_supported_features = features
 
-        min_t, max_t = _detect_temp_range(device_data)
+        min_t, max_t = _detect_value_range(device_data, FUNC_TEMPERATURE, (16.0, 30.0))
         self._attr_min_temp = min_t
         self._attr_max_temp = max_t
 
@@ -191,17 +175,12 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         if temp is not None:
             return temp
 
-        pult = dd.get("pult", [])
-        for section in pult:
-            if section.get("title") == "Temperature":
-                for func in section.get("functions", []):
-                    if func.get("id") == FUNCTION_ID_TEMPERATURE:
-                        val = func.get("state", {}).get("value")
-                        if val is not None:
-                            try:
-                                return float(val)
-                            except (ValueError, TypeError):
-                                pass
+        val = get_function_state(dd, FUNC_TEMPERATURE).get("value")
+        if val is not None:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                pass
 
         return None
 
@@ -226,6 +205,10 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
             if icon in icon_names:
                 return mode
 
+        for function, mode_str in FUNCTION_TO_HVAC_MODE.items():
+            if get_function_state(dd, function).get("isOn", False):
+                return HVACMode(mode_str)
+
         return HVACMode.AUTO
 
     @property
@@ -249,17 +232,11 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
                 if speed_str.isdigit():
                     return speed_str
 
-        pult = dd.get("pult", [])
-        for section in pult:
-            for func in section.get("functions", []):
-                func_id = func.get("id")
-                func_state = func.get("state", {})
-                if func_id == FUNCTION_ID_FAN_SPEED_AUTO and func_state.get("isOn", False):
-                    return "auto"
-                if func_id == FUNCTION_ID_FAN_SPEED:
-                    val = func_state.get("value")
-                    if val is not None:
-                        return str(val)
+        if get_function_state(dd, FUNC_FAN_SPEED_AUTO).get("isOn", False):
+            return "auto"
+        val = get_function_state(dd, FUNC_FAN_SPEED).get("value")
+        if val is not None:
+            return str(val)
 
         return "auto"
 
@@ -270,20 +247,15 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         if not dd:
             return PRESET_NONE
 
-        func_id_to_preset = FUNCTION_ID_TO_PRESET
-
-        pult = dd.get("pult", [])
-        for section in pult:
-            for func in section.get("functions", []):
-                fid = func.get("id")
-                if fid in func_id_to_preset and func.get("state", {}).get("isOn", False):
-                    return func_id_to_preset[fid]
+        for function, preset in FUNCTION_TO_PRESET.items():
+            if get_function_state(dd, function).get("isOn", False):
+                return preset
 
         icon_names = dd.get("state", {}).get("info", {}).get("iconNames", [])
         icon_to_preset = {
-            "eco_active": FUNCTION_ID_TO_PRESET.get(FUNCTION_ID_ECO, "eco"),
-            "turbo_active": FUNCTION_ID_TO_PRESET.get(FUNCTION_ID_TURBO, "turbo"),
-            "sleep_active": FUNCTION_ID_TO_PRESET.get(FUNCTION_ID_SLEEP, "sleep"),
+            "eco_active": FUNCTION_TO_PRESET[FUNC_ECO],
+            "turbo_active": FUNCTION_TO_PRESET[FUNC_TURBO],
+            "sleep_active": FUNCTION_TO_PRESET[FUNC_SLEEP],
         }
         for icon, preset in icon_to_preset.items():
             if icon in icon_names:
@@ -298,36 +270,24 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         if not dd:
             return SWING_OFF
 
-        pult = dd.get("pult", [])
-        vertical_on = False
-        horizontal_on = False
-        swing_3d_on = False
-
-        for section in pult:
-            for func in section.get("functions", []):
-                fid = func.get("id")
-                is_on = func.get("state", {}).get("isOn", False)
-                if fid == FUNCTION_ID_VERTICAL_SWING and is_on:
-                    vertical_on = True
-                elif fid == FUNCTION_ID_HORIZONTAL_SWING and is_on:
-                    horizontal_on = True
-                elif fid == FUNCTION_ID_3D_SWING and is_on:
-                    swing_3d_on = True
+        vertical_on = get_function_state(dd, FUNC_VERTICAL_SWING).get("isOn", False)
+        horizontal_on = get_function_state(dd, FUNC_HORIZONTAL_SWING).get("isOn", False)
+        swing_3d_on = get_function_state(dd, FUNC_3D_SWING).get("isOn", False)
 
         if swing_3d_on or (vertical_on and horizontal_on):
             return SWING_BOTH
         if vertical_on:
-            return FUNCTION_ID_TO_SWING[FUNCTION_ID_VERTICAL_SWING]
+            return FUNCTION_TO_SWING[FUNC_VERTICAL_SWING]
         if horizontal_on:
-            return FUNCTION_ID_TO_SWING[FUNCTION_ID_HORIZONTAL_SWING]
+            return FUNCTION_TO_SWING[FUNC_HORIZONTAL_SWING]
 
         icon_names = dd.get("state", {}).get("info", {}).get("iconNames", [])
         if "swing3D_active" in icon_names:
             return SWING_BOTH
         if "swingVertical_active" in icon_names:
-            return FUNCTION_ID_TO_SWING[FUNCTION_ID_VERTICAL_SWING]
+            return FUNCTION_TO_SWING[FUNC_VERTICAL_SWING]
         if "swingHorizontal_active" in icon_names:
-            return FUNCTION_ID_TO_SWING[FUNCTION_ID_HORIZONTAL_SWING]
+            return FUNCTION_TO_SWING[FUNC_HORIZONTAL_SWING]
 
         return SWING_OFF
 
@@ -346,7 +306,7 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
 
         try:
             await self.coordinator.async_control_device_with_retry(
-                int(self._device_id), FUNCTION_ID_TEMPERATURE, int(temperature),
+                int(self._device_id), FUNC_TEMPERATURE, int(temperature),
             )
         except Exception as err:
             _LOGGER.error("Failed to set temperature for device %s: %s", self._device_id, err)
@@ -357,7 +317,7 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             try:
                 await self.coordinator.async_control_device_with_retry(
-                    int(self._device_id), FUNCTION_ID_POWER, False,
+                    int(self._device_id), FUNC_POWER, False,
                 )
             except Exception as err:
                 _LOGGER.error("Failed to turn off device %s: %s", self._device_id, err)
@@ -368,16 +328,16 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
             if current_mode == HVACMode.OFF:
                 try:
                     await self.coordinator.async_control_device_with_retry(
-                        int(self._device_id), FUNCTION_ID_POWER, True,
+                        int(self._device_id), FUNC_POWER, True,
                     )
                 except Exception as err:
                     _LOGGER.warning("Failed to turn on device %s: %s", self._device_id, err)
 
-            function_id = HVAC_MODE_TO_FUNCTION_ID.get(hvac_mode.value)
-            if function_id:
+            function = HVAC_MODE_TO_FUNCTION.get(hvac_mode.value)
+            if function:
                 try:
                     await self.coordinator.async_control_device_with_retry(
-                        int(self._device_id), function_id, None,
+                        int(self._device_id), function, None,
                     )
                 except Exception as err:
                     _LOGGER.error(
@@ -397,12 +357,12 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         try:
             if fan_mode == "auto":
                 await self.coordinator.async_control_device_with_retry(
-                    int(self._device_id), FUNCTION_ID_FAN_SPEED_AUTO, True,
+                    int(self._device_id), FUNC_FAN_SPEED_AUTO, True,
                 )
             else:
                 speed_value = int(fan_mode)
                 await self.coordinator.async_control_device_with_retry(
-                    int(self._device_id), FUNCTION_ID_FAN_SPEED, speed_value,
+                    int(self._device_id), FUNC_FAN_SPEED, speed_value,
                 )
         except ValueError:
             _LOGGER.warning("Invalid fan mode value: %s", fan_mode)
@@ -419,20 +379,20 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         try:
             current = self.preset_mode
             if current and current != PRESET_NONE and current != preset_mode:
-                func_id = PRESET_MODE_TO_FUNCTION_ID.get(current)
-                if func_id:
+                function = PRESET_MODE_TO_FUNCTION.get(current)
+                if function:
                     try:
                         await self.coordinator.async_control_device_with_retry(
-                            int(self._device_id), func_id, False,
+                            int(self._device_id), function, False,
                         )
                     except Exception:
                         _LOGGER.debug("Failed to turn off preset %s", current)
 
             if preset_mode != PRESET_NONE:
-                function_id = PRESET_MODE_TO_FUNCTION_ID.get(preset_mode)
-                if function_id:
+                function = PRESET_MODE_TO_FUNCTION.get(preset_mode)
+                if function:
                     await self.coordinator.async_control_device_with_retry(
-                        int(self._device_id), function_id, True,
+                        int(self._device_id), function, True,
                     )
         except Exception as err:
             _LOGGER.error("Failed to set preset mode for device %s: %s", self._device_id, err)
@@ -447,20 +407,20 @@ class DaichiClimateEntity(DaichiEntity, ClimateEntity):
         try:
             current = self.swing_mode
             if current and current != SWING_OFF and current != swing_mode:
-                func_id = SWING_MODE_TO_FUNCTION_ID.get(current)
-                if func_id:
+                function = SWING_MODE_TO_FUNCTION.get(current)
+                if function:
                     try:
                         await self.coordinator.async_control_device_with_retry(
-                            int(self._device_id), func_id, False,
+                            int(self._device_id), function, False,
                         )
                     except Exception:
                         _LOGGER.debug("Failed to turn off swing %s", current)
 
             if swing_mode != SWING_OFF:
-                function_id = SWING_MODE_TO_FUNCTION_ID.get(swing_mode)
-                if function_id:
+                function = SWING_MODE_TO_FUNCTION.get(swing_mode)
+                if function:
                     await self.coordinator.async_control_device_with_retry(
-                        int(self._device_id), function_id, True,
+                        int(self._device_id), function, True,
                     )
         except Exception as err:
             _LOGGER.error("Failed to set swing mode for device %s: %s", self._device_id, err)

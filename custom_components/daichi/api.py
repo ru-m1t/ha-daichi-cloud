@@ -8,18 +8,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import (
-    FUNCTION_ID_POWER,
-    FUNCTION_ID_TEMPERATURE,
-    FUNCTION_ID_COOL,
-    FUNCTION_ID_HEAT,
-    FUNCTION_ID_AUTO,
-    FUNCTION_ID_DRY,
-    FUNCTION_ID_FAN,
-    FUNCTION_ID_FAN_SPEED_AUTO,
-    FUNCTION_ID_FAN_SPEED,
-    DEFAULT_CLIENT_ID,
-)
+from .const import DEFAULT_CLIENT_ID
 from .exceptions import CannotConnect, InvalidAuth
 
 _LOGGER = logging.getLogger(__name__)
@@ -361,26 +350,14 @@ class DaichiApiClient:
                 "parameters": parameters,
             }
 
-            if function_id == FUNCTION_ID_POWER:
-                value_obj["isOn"] = bool(value) if value is not None else True
-            elif function_id in (
-                FUNCTION_ID_COOL, FUNCTION_ID_HEAT, FUNCTION_ID_AUTO,
-                FUNCTION_ID_DRY, FUNCTION_ID_FAN,
-            ):
-                value_obj["isOn"] = True
-            elif function_id == FUNCTION_ID_TEMPERATURE:
+            # bool — включение/выключение, число — значение (температура, скорость),
+            # None — активация (applyable-функции, например режимы работы)
+            if isinstance(value, bool):
+                value_obj["isOn"] = value
+            elif value is not None:
                 value_obj["value"] = value
-            elif function_id == FUNCTION_ID_FAN_SPEED:
-                value_obj["value"] = value
-            elif function_id == FUNCTION_ID_FAN_SPEED_AUTO:
-                value_obj["isOn"] = True
             else:
-                if isinstance(value, bool):
-                    value_obj["isOn"] = value
-                elif value is not None:
-                    value_obj["value"] = value
-                else:
-                    value_obj["isOn"] = True
+                value_obj["isOn"] = True
 
             payload = {
                 "cmdId": cmd_id,

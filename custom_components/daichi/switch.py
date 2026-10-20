@@ -9,33 +9,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, FUNCTION_ID_SOUND_OFF
+from .const import DOMAIN, FUNC_SOUND_OFF
 from .coordinator import DaichiDataUpdateCoordinator
+from .device_control import find_function, get_function_state
 from .entity import DaichiEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _device_has_function(device_data: dict[str, Any], function_id: int) -> bool:
-    """Check if device supports the given function ID."""
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            if func.get("id") == function_id:
-                return True
-    return False
-
-
-def _get_function_state(device_data: dict[str, Any], function_id: int) -> bool:
-    """Get isOn state for a toggle function from device pult."""
-    for section in device_data.get("pult", []):
-        for func in section.get("functions", []):
-            if func.get("id") == function_id:
-                return bool(func.get("state", {}).get("isOn", False))
-    return False
-
-
 class DaichiSoundOffSwitch(DaichiEntity, SwitchEntity):
-    """Переключатель функции 365 — звук (тихий режим). Вкл = звук выключен."""
+    """Переключатель функции Sound Off (beepOff) — звук (тихий режим). Вкл = звук выключен."""
 
     _attr_translation_key = "sound_off"
 
@@ -52,13 +35,13 @@ class DaichiSoundOffSwitch(DaichiEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return True if sound is off (silent mode)."""
-        return _get_function_state(self.device_data, FUNCTION_ID_SOUND_OFF)
+        return bool(get_function_state(self.device_data, FUNC_SOUND_OFF).get("isOn", False))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn sound off (enable silent mode)."""
         try:
             await self.coordinator.async_control_device_with_retry(
-                int(self._device_id), FUNCTION_ID_SOUND_OFF, True
+                int(self._device_id), FUNC_SOUND_OFF, True
             )
         except Exception as err:
             _LOGGER.error(
@@ -72,7 +55,7 @@ class DaichiSoundOffSwitch(DaichiEntity, SwitchEntity):
         """Turn sound on (disable silent mode)."""
         try:
             await self.coordinator.async_control_device_with_retry(
-                int(self._device_id), FUNCTION_ID_SOUND_OFF, False
+                int(self._device_id), FUNC_SOUND_OFF, False
             )
         except Exception as err:
             _LOGGER.error(
@@ -96,7 +79,7 @@ async def async_setup_entry(
 
     entities: list[SwitchEntity] = []
     for device_id, device_data in (coordinator.data or {}).items():
-        if _device_has_function(device_data, FUNCTION_ID_SOUND_OFF):
+        if find_function(device_data, FUNC_SOUND_OFF) is not None:
             entities.append(
                 DaichiSoundOffSwitch(coordinator, str(device_id), device_data)
             )
